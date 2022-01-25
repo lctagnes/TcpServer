@@ -68,7 +68,11 @@ int main(int argc, char *argv[])
         std::cout << "Echo Message : " << message << std::endl;
     }
 
+    //关闭写通道
+    shutdown(sock, SHUT_WR);
+    std::cout << "客户端进入半关闭状态，不再发送数据" << std::endl;
     //关闭套接字
     close(sock);
+    std::cout << "完全关闭 TCP 连接" << std::endl;
     return 0;
 }
