@@ -101,6 +101,88 @@ int fork_workproc(int serv_sock)
     return 0;
 }
 
+//select I/O复用
+int select_workproc(int serv_sock)
+{
+    struct sockaddr_in client_adr;
+    socklen_t adr_size;
+    int client_sock, ret;
+    int fd_max, fd_num;
+    fd_set reads, cpy_reads;
+    struct timeval timeout;
+    char buf[BUFFSIZE];
+    int str_len;
+
+    FD_ZERO(&reads);
+    FD_SET(serv_sock, &reads);
+    fd_max = serv_sock;
+
+    while(1)
+    {
+        cpy_reads = reads;
+        timeout.tv_sec = 5;
+        timeout.tv_usec = 5000;
+
+        fd_num = select(fd_max + 1, &cpy_reads, 0, 0, &timeout);
+        if(fd_num < 0)
+        {
+            //调用select 失败
+            std::cout << "select error." << std::endl;
+            break;
+        }
+        else if(fd_num == 0)
+        {
+            //目前没有数据事件发生
+            continue;
+        }
+        //循环处理当前所有可读事件
+        for(int i = 0; i < fd_max + 1; i++)
+        {
+            if(FD_ISSET(i, &cpy_reads))
+            {
+                //如果当前要处理的文件描述符是 serv_sock 服务器套接字，则表示需要处理客户端请求连接事件
+                if(i == serv_sock)
+                {
+                    adr_size = sizeof(client_adr);
+                    client_sock = accept(serv_sock, (struct sockaddr*)&client_adr, &adr_size);
+                    //打印新连接客户端信息
+                    std::cout << "New Client IP : " << inet_ntoa(client_adr.sin_addr) << " , port : " << ntohs(client_adr.sin_port) << std::endl;
+                    //将新连接的客户端注册到select处理队列中
+                    FD_SET(client_sock, &reads);
+                    //如果当前最大值小于新客户端套接字，则改变
+                    if(fd_max < client_sock)
+                    {
+                        fd_max = client_sock;
+                    }
+                }
+                else
+                {
+                    //处理客户端发来的消息，echo服务器负责将数据返回
+                    str_len = read(i, buf, BUFFSIZE);
+                    if(str_len == 0)
+                    {
+                        //客户端连接断开
+                        //将客户端套接字从select监控队列中清除
+                        FD_CLR(i, &reads);
+                        close(i);
+                        //输出打印
+                        std::cout << "Closed Client : " << i << std::endl;
+                    }
+                    else
+                    {
+                        //正常处理数据，将读取到的数据返回给客户端
+                        write(i, buf, str_len);
+                    }
+
+                }
+            }
+        }
+    }
+
+    return 0;
+}
+
+
 int main(int argc, char *argv[])
 {
     int serv_sock, ret;
@@ -165,8 +247,10 @@ int main(int argc, char *argv[])
         error_handle("listen", "listen() error.");
     }
 
-    fork_workproc(serv_sock);
-    
+    // //多进程方式实现
+    // fork_workproc(serv_sock);
+    //使用select I/O复用方式
+    select_workproc(serv_sock);
     //服务器关闭，关闭服务器套接字
     close(serv_sock);
     return 0;
