@@ -182,6 +182,123 @@ int select_workproc(int serv_sock)
     return 0;
 }
 
+//设置套接字非阻塞
+void setnonblockingmode(int fd)
+{
+    int flag = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flag|O_NONBLOCK);
+}
+
+//epoll I/O 复用方式
+int epoll_workproc(int serv_sock)
+{
+    struct sockaddr_in client_adr;
+    socklen_t adr_size;
+    int client_sock, ret;
+    int epoll_size, epfd, event_cnt;
+    struct epoll_event *ep_events;
+    struct epoll_event event;
+    int timeout;
+    int str_len;
+    char buf[BUFFSIZE];
+
+    //初始化部分参数，创建epoll 例程
+    epoll_size = 50;    //默认定义50作为监视文件描述符数量，可修改
+    epfd = epoll_create(epoll_size);
+    if(epfd < 0)
+    {
+        //创建失败，退出程序
+        std::cout << "epoll_create error." << std::endl;
+        return -1;
+    }
+    //申请epoll_wait 返回缓冲区
+    ep_events = (struct epoll_event *)malloc(sizeof(struct epoll_event) * epoll_size);
+
+    //设置服务器套接字非阻塞
+    setnonblockingmode(serv_sock);
+    //优先将服务器套接字注册到epoll监视例程中
+    event.events = EPOLLIN; //服务器套接字不使用边缘触发
+    event.data.fd = serv_sock;
+    //添加文件描述符及事件
+    epoll_ctl(epfd, EPOLL_CTL_ADD, serv_sock, &event);
+
+    //初始化超时时间为 5.5 s
+    timeout = 5500;
+
+    while(1)
+    {
+        //调用 epoll_wait 获取当前文件描述符注册事件
+        event_cnt = epoll_wait(epfd, ep_events, epoll_size, timeout);
+        if(event_cnt < 0)
+        {
+            //调用select 失败
+            std::cout << "epoll_wait error." << std::endl;
+            break;
+        }
+        else if(event_cnt == 0)
+        {
+            //目前没有数据事件发生，超时
+            continue;
+        }
+        //循环处理当前所有待处理事件
+        for(int i = 0; i < event_cnt; i++)
+        {
+            if(ep_events[i].data.fd == serv_sock)//判断事件文件描述符是服务器套接字
+            {
+                //如果当前要处理的文件描述符是 serv_sock 服务器套接字，则表示需要处理客户端请求连接事件
+                adr_size = sizeof(client_adr);
+                client_sock = accept(serv_sock, (struct sockaddr*)&client_adr, &adr_size);
+                //打印新连接客户端信息
+                std::cout << "New Client IP : " << inet_ntoa(client_adr.sin_addr) << " , port : " << ntohs(client_adr.sin_port) << std::endl;
+                //初始化 event 变量，注册到 epoll 监视列表中
+                event.events = EPOLLIN | EPOLLET;  //添加边缘触发条件
+                event.data.fd = client_sock;
+                setnonblockingmode(client_sock);    //设置文件描述符非阻塞
+                epoll_ctl(epfd, EPOLL_CTL_ADD, client_sock, &event);
+            }
+            else
+            {
+                //由于添加了边缘触发，所以一次操作就需要将输入缓冲区中数据全部处理完成
+                while(1)
+                {
+                    //清除缓存区
+                    memset(buf, 0, BUFFSIZE);
+                    //处理客户端发来的消息，echo服务器负责将数据返回
+                    str_len = read(ep_events[i].data.fd, buf, BUFFSIZE);
+                    if(str_len == 0)
+                    {
+                        //客户端断开连接，将该客户端套接字从监视列表中删除
+                        epoll_ctl(epfd, EPOLL_CTL_DEL, ep_events[i].data.fd, NULL);
+                        close(ep_events[i].data.fd);
+                        //输出打印
+                        std::cout << "Closed Client : " << ep_events[i].data.fd << std::endl;
+                        break;
+                    }
+                    else if(str_len < 0)
+                    {
+                        if(errno == EAGAIN)
+                        {
+                            //数据读取完毕
+                            break;
+                        }
+                    }
+                    else
+                    {
+                        //正常处理数据，将读取到的数据返回给客户端
+                        write(ep_events[i].data.fd, buf, str_len);
+                    }
+
+
+                }
+            }
+        }
+    }
+
+    //关闭epoll 例程
+    close(epfd);
+
+    return 0;
+}
 
 int main(int argc, char *argv[])
 {
@@ -249,8 +366,11 @@ int main(int argc, char *argv[])
 
     // //多进程方式实现
     // fork_workproc(serv_sock);
-    //使用select I/O复用方式
-    select_workproc(serv_sock);
+    // //使用select I/O复用方式
+    // select_workproc(serv_sock);
+
+    //使用epoll I/O复用方式
+    epoll_workproc(serv_sock);
     //服务器关闭，关闭服务器套接字
     close(serv_sock);
     return 0;
