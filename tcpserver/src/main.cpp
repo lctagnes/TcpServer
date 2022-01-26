@@ -5,6 +5,8 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <sys/socket.h>
+#include <sys/types.h>
+#include <sys/wait.h>
 #include "base.h"
 
 //出错调用函数
@@ -16,14 +18,99 @@ static void error_handle(std::string opt, std::string message)
     exit(1);
 }
 
+//子进程处理客户端请求函数封装
+int ChildProcessWork(int ServSocket, int ChildSocket)
+{
+    char buf[BUFFSIZE] = {0};
+    int str_len;
+    //首先在子进程中关闭服务端套接字
+    close(ServSocket);
+
+    while(1)
+    {
+        //接收客户端数据
+        str_len = read(ChildSocket, buf, BUFFSIZE);
+        if(str_len == 0)
+        {
+            //客户端断开连接，处理结束
+            break;
+        }
+        //多进程服务中不再将受到数据打印输出
+        //将客户端数据返回给客户端
+        write(ChildSocket, buf, str_len);
+        memset(buf, 0, BUFFSIZE);
+    }
+
+    //关闭客户端套接字
+    close(ChildSocket);
+    return 0;
+}
+
+//处理子进程结束后，父进程回收资源的信号回调函数
+void read_childproc(int signum)
+{
+    pid_t pid;
+    int status;
+    pid = waitpid(-1, &status, WNOHANG);
+    std::cout << "Removed proc id : " << pid << std::endl;
+}
+
+//多进程工作
+int fork_workproc(int serv_sock)
+{
+    struct sockaddr_in client_adr;
+    socklen_t adr_size;
+    int client_sock, ret;
+    pid_t pid;
+
+    //循环等待客户端请求
+    while (1)
+    {
+        adr_size = sizeof(client_adr);
+        client_sock = accept(serv_sock, (struct sockaddr*)&client_adr, &adr_size);
+        if(client_sock < 0)
+        {
+            //接收请求失败，继续工作
+            continue;
+        }
+        else{
+            //接收到新的客户端，打印输出
+            std::cout << "New Client IP : " << inet_ntoa(client_adr.sin_addr) << " , port : " << ntohs(client_adr.sin_port) << std::endl;
+            //创建子进程进行处理
+            pid = fork();
+            if(pid < 0)
+            {
+                //创建子进程失败，关闭连接
+                std::cout << "fork error, close client" << std::endl;
+                close(client_sock);
+                continue;
+            }
+            if(pid == 0)
+            {
+                //进入子进程,
+                ret = ChildProcessWork(serv_sock, client_sock);
+                //调用结束后直接结束子进程
+                exit(ret);
+            }
+            else{
+                //父进程关闭客户端套接字，继续等待新客户端请求
+                close(client_sock);
+            }
+        }
+    }
+    return 0;
+}
+
 int main(int argc, char *argv[])
 {
-    int serv_sock, client_sock;
-    char message[BUFFSIZE];
-    int str_len, ret;
+    int serv_sock, ret;
+    struct sockaddr_in serv_adr;
+    struct sigaction act;
 
-    struct sockaddr_in serv_adr, client_adr;
-    socklen_t client_adr_size;
+    int str_len, ret;
+    int option;
+    socklen_t optlen;
+    char buf[BUFFSIZE];
 
     //判断命令行参数合法性
     if(argc < 2)
@@ -31,6 +118,11 @@ int main(int argc, char *argv[])
         std::cout << "Usage : " << argv[0] << " <port>" << std::endl;
         exit(1);
     }
+
+    act.sa_handler = read_childproc;
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = 0;
+    state = sigaction(SIGCHLD, &act, 0);
 
     //创建socket套接字
     serv_sock = socket(PF_INET, SOCK_STREAM, 0);
@@ -73,38 +165,8 @@ int main(int argc, char *argv[])
         error_handle("listen", "listen() error.");
     }
 
-    client_adr_size = sizeof(client_adr);
-
-    while(1)
-    {
-        //使用accept接收客户端连接请求
-        client_sock = accept(serv_sock, (struct sockaddr*)&client_adr, &client_adr_size);
-        if(client_sock < 0)
-        {
-            //接收客户端连接请求失败，
-            continue;
-        }
-        //接收新的客户端请求，进行客户端数据处理
-        std::cout << "Accept New Client : " << inet_ntoa(client_adr.sin_addr) << " , port : " << ntohs(client_adr.sin_port) << std::endl;
-        std::cout << "Start Recv Client Data..." << std::endl;
-
-        //清空缓存区
-        memset((void *)&message, 0, BUFFSIZE);
-        while((str_len = read(client_sock, message, BUFFSIZE)) != 0)
-        {
-            //成功读取客户端发送来的数据消息
-            //打印输出
-            std::cout << "Recv Message : " << message << std::endl;
-            //将消息回传给客户端，作为回声服务器，类似 echo 命令
-            write(client_sock, message, str_len);
-            //清空缓存区，等待再次读取数据
-            memset(message, 0, BUFFSIZE);
-        }
-
-        //客户端断开连接，关闭套接字
-        close(client_sock);
-    }
-
+    fork_workproc(serv_sock);
+    
     //服务器关闭，关闭服务器套接字
     close(serv_sock);
     return 0;
