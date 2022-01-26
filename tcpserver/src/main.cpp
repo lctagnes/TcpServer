@@ -39,6 +39,20 @@ int main(int argc, char *argv[])
         error_handle("socket", "socket() error.");
     }
 
+    //添加 Time-wait 状态重新分配断开设置
+    /* 
+    如果是客户端先断开连接，不存在什么问题。
+    如果是服务器先调用close断开连接，短时间内重启服务器会出现bind error的问题。
+    默认等待 2 到 3 分钟再次启动服务器就正常了。只需要修改套接字可选项 SO_REUSEADDR 即可。
+    套接字可选项 SO_REUSEADDR 默认值为 0 ，表示不会重新分配 Time-wait 状态下的套接字端口，
+    也就是在 TCP 连接进入 Time-wait 状态后依然占用之前的 TCP 端口号。
+    如果将 SO_REUSEADDR 设置为 1 ，那么当 TCP 连接进入 Time-wait 状态后就会重新分配端口号，
+    而不会占用之前端口，这样就不会影响新的服务再次启动了。
+    */
+    optlen = sizeof(option);
+    option = 1;
+    setsockopt(serv_sock, SOL_SOCKET, SO_REUSEADDR, (void*)&option, optlen);
+
     //初始化服务器套接字参数，设置网卡IP 和端口号
     memset(&serv_adr, 0, sizeof(serv_adr));
     serv_adr.sin_family = AF_INET;
