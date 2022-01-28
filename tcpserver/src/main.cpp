@@ -7,6 +7,11 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/select.h>
+#include <sys/time.h>
+#include <sys/epoll.h>
+#include <pthread.h>
+#include <fcntl.h>
 #include "base.h"
 
 //出错调用函数
@@ -302,11 +307,11 @@ int epoll_workproc(int serv_sock)
 
 int main(int argc, char *argv[])
 {
-    int serv_sock, ret;
+    int serv_sock;
     struct sockaddr_in serv_adr;
     struct sigaction act;
 
-    int str_len, ret;
+    int str_len, ret, state;
     int option;
     socklen_t optlen;
     char buf[BUFFSIZE];

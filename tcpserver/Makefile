@@ -29,7 +29,7 @@ tests=${patsubst %.cpp,%,${test_src}}
 ####################### flag section ########################################
 VER ?= 0.1
 
-OF=-g
+OF=-g -pthread
 CFLAGS=-I${include_dir}
 
 CC=g++
